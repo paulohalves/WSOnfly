@@ -1,0 +1,1317 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "TOTVS.CH"
+
+/*
+	Attention: 
+		- Private methods in camelCase
+		- Public methods in PascalCase
+*/
+
+/*/{Protheus.doc} ONFLYEXEC
+Classe responsável pela execução das funções da API REST da Onfly
+@type class
+@version 1.0.0 
+@author Paulo Alves
+@since 25/07/2022
+/*/
+Class ONFLYEXEC
+
+	Private Data lRet as Logical
+	Private Data aRet as Array
+	Private Data cError as Character
+
+	Public Method New() Constructor
+
+	Private Method resetResult()
+	Private Method queryToAlias(cQuery)
+	Private Method getErrorsAutoProcessing()
+	Private Method convertContent(cField, xContent)
+	Public  Method GetUniqueKey(cTable)
+	Public  Method GetTableName(cTable)
+	Public  Method GetRecno(cTable, cKey)
+	Public  Method GenericQuery(cTable, aSelect, aWhere, nLimit, cOrder)
+	Public  Method GetRecord()
+	Public  Method ExecuteQuery(cQuery)
+	Public  Method GenericInsert(cTable, aData)
+	Public  Method GenericUpdate(cTable, nRecno, aData)
+	Public  Method GenericGet(cTable, cQuery)
+
+	Public Method GetErrors()
+	Public Method GetStatus()
+	Public Method GetResult()
+
+	Public  Method GetSupplierByDocument(cDoc)
+	Public  Method GetSupplierByEmail(cEmail)
+	Private Method supplierQuery(cDoc)
+	Private Method getRecords(cAlias)
+	Public  Method InsertSupplier(aData)
+	
+	Public Method InsertPayable(aData) 
+	Public Method GetPayable(cTable, cKey)
+	Public Method GetPayableKeyFromDocument(cTable, cKey)
+	Public Method ExecutePayable(cKey, dDate, cBank, cBankBranch, cBankAccount)
+	Public Method PaymentClearing(aPay, aNDF, dDateClearing)
+	Public Method InsertPaymentInvoice(aRecnoPay, aInvoiceData)
+
+	Public Method InsertSupplierInvoice(aDoc, aItems)
+	Public Method InsertSupplierPreInvoice(aDoc, aItems)
+	Public Method GetSupplierInvoice(cTable, cKey) 
+
+	Public Method InsertPurchaseOrder(aInfo, aItems)
+	Public Method GetPurchaseOrder(cTable, cKey)
+
+EndClass
+
+
+Method New() Class ONFLYEXEC
+
+	::resetResult()
+
+Return Self
+
+////////////// Funções internas //////////////
+
+Method resetResult() Class ONFLYEXEC
+
+	::lRet := .F.
+	::aRet := {}
+	::cError := ""
+
+Return Self
+
+Method queryToAlias(cQuery) Class ONFLYEXEC
+
+	cQuery := ChangeQuery(cQuery)
+    cAlias := MPSysOpenQuery(cQuery)
+
+Return cAlias
+
+Method getErrorsAutoProcessing() Class ONFLYEXEC
+
+	Local aLog := GetAutoGRLog()
+	Local nY := 1
+
+	For nY := 1 To Len(aLog)
+		If !Empty(::cError)
+			::cError += chr(13) + chr(10)
+		EndIf
+		::cError += aLog[nY]
+	Next
+
+Return ::cError
+
+Method convertContent(cField, xContent) Class ONFLYEXEC
+
+    xRet := xContent
+    cTpField := ValType(xContent)
+    cCpoSX3  := GetSx3Cache(cField, "X3_TIPO")
+
+    If cTpField <> cCpoSX3
+
+        If cTpField == "C" .And. cCpoSX3 == "N"
+            xRet := Val(xContent)
+        ElseIf cTpField == "C" .And. cCpoSX3 == "D"
+            xRet := StoD(xContent)
+        EndIf
+
+    EndIf
+
+Return xRet
+
+Method GetUniqueKey(cTable) Class ONFLYEXEC
+	Local aArea := FWGetArea()
+	Local bKey := ""
+	
+	DbSelectArea("SIX")
+	SIX->(DbSetOrder(1))
+	SIX->(DBGoTop())
+	SIX->(DbSeek(cTable))
+
+	While SIX->(!Eof()) .And. SIX->INDICE == cTable
+
+		If Val(SIX->ORDEM) == 1
+			bKey := SIX->CHAVE
+			Exit
+		EndIf
+
+		SIX->(DbSkip())
+	End
+
+	If Len(bKey) > 0
+		DbSelectArea(cTable)
+    	cKey := &bKey
+	EndIf
+
+	FWRestArea(aArea)
+Return cKey
+
+Method GetTableName(cTable) Class ONFLYEXEC
+	cTableName := RetSQLName(cTable)
+Return cTableName
+
+Method GetRecno(cTable, cKey) Class ONFLYEXEC
+	
+	DbSelectArea(cTable)
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+		Return Recno()
+	EndIf
+
+Return Nil
+
+Method GenericQuery(cTable, aSelect, aWhere, nLimit, cOrder) Class ONFLYEXEC
+
+	Default aSelect := {}
+	Default aWhere  := {}
+	Default cJoin   := ""
+	Default nLimit  := 1
+	Default cOrder  := ""
+
+	Local lDBOracle := "ORACLE" $ TCGetDB()
+	Local cSelect := ""
+	Local cWhere := ""
+	Local nI := 1
+
+	//SELECT
+	If Len(aSelect) > 0
+		For nI := 1 to Len(aSelect)
+			If nI > 1
+				cSelect += ", "
+			EndIf 
+
+			cSelect += aSelect[nI]
+		Next
+	Else 
+		cSelect := "*"
+	EndIf
+
+	//WHERE
+	If Len(aWhere) > 0
+		For nI := 1 to Len(aWhere)
+			If nI == 1
+				cWhere += "WHERE "
+			EndIf
+
+			If nI > 1
+				cWhere += CRLF + "AND "
+			EndIf
+
+			cWhere += aWhere[nI][1] + " " 	//Campo
+			cWhere += aWhere[nI][2] + " "	//Operador
+
+			//Conteúdo
+			cTpContent := ValType(aWhere[nI][3])
+			If cTpContent == "N"
+				cWhere += Alltrim(Str(aWhere[nI][3]))
+			Else
+				cWhere += "'" + aWhere[nI][3] + "'"
+			EndIf 
+		Next
+	EndIf
+
+	//Query
+	cQuery := "SELECT {{TOPSQLSERVER}} " + CRLF
+	cQuery += cSelect + ", COALESCE(R_E_C_N_O_, NULL) RECNOKEY_ " + CRLF
+    cQuery += "FROM " + ::GetTableName(cTable) + " " + CRLF
+    cQuery += cWhere + " " + CRLF
+
+	If Len(cOrder) > 0
+		cQuery += "ORDER BY " + cOrder + " " + CRLF
+	EndIf
+
+	cQuery += "{{TOPORACLE}}"
+
+	//Se o BD for Oracle, faz o tratamento específico da cláusula TOP
+	If lDBOracle
+		cTop := "FETCH FIRST " +  Alltrim(Str(nLimit)) + " ROWS ONLY "  + CRLF
+		
+		cQuery := Replace(cQuery, "{{TOPSQLSERVER}}", "")
+		cQuery := Replace(cQuery, "{{TOPORACLE}}", cTop)
+	Else
+		cTop := "TOP " +  Alltrim(Str(nLimit)) + " "  + CRLF
+		
+		cQuery := Replace(cQuery, "{{TOPSQLSERVER}}", cTop)
+		cQuery := Replace(cQuery, "{{TOPORACLE}}", "")
+	EndIf
+
+	cQuery := ChangeQuery(cQuery)
+	
+Return cQuery
+
+Method GetRecord() Class ONFLYEXEC
+	
+	Local aStruct := DBSTruct()
+	Local nI, nT  := Len(aStruct)
+	Local aDados  := {}
+	
+	For nI := 1 to nT
+		AAdd(aDados, {aStruct[nI][1], FieldGet(nI)})
+	Next
+
+Return aDados
+
+Method ExecuteQuery(cQuery) Class ONFLYEXEC
+
+	::resetResult()
+
+	cAlias := ::queryToAlias(cQuery)
+	::aRet := ::getRecords(cAlias)
+
+Return ::aRet
+
+Method GenericInsert(cTable, aData) Class ONFLYEXEC
+	
+	::resetResult()
+
+	Local oModelGen
+	Local oStructGen
+	Local nX := 1
+
+	oStructGen := FWFormStruct(1, cTable)
+	oModelGen := MPFormModel():New("GEN_TABLE") 
+ 	oModelGen:AddFields('MASTERGEN',,oStructGen)
+
+	oModelGen:SetOperation(3)
+
+	oModelGen:SetPrimaryKey({})
+	oModelGen:Activate()
+
+	For nX := 1 to Len(aData)
+		xContent := ::convertContent(aData[nX][1], aData[nX][2])
+		oModelGen:SetValue('MASTERGEN', aData[nX][1], xContent)
+	Next
+	
+	If !oModelGen:VldData()
+		
+		::lRet := .F.
+		aErr := oModelGen:GetErrorMessage()
+
+		::cError := aErr[6]
+
+		oModelGen:DeActivate()
+		oModelGen:Destroy()
+
+		Return ::lRet
+		
+	EndIf
+
+	::lRet := .T.
+
+	oModelGen:CommitData()
+
+	oModelGen:DeActivate()
+	oModelGen:Destroy()
+	
+Return ::lRet
+
+Method GenericUpdate(cTable, nRecno, aData) Class ONFLYEXEC
+	
+	::resetResult()
+
+	Local oModelGen
+	Local oStructGen
+	Local nX := 1
+
+	If Len(aData) == 0 
+		::lRet := .F.
+		::cError := "Não foi possivel posicionar no registro informado!"
+
+		Return ::lRet
+	EndIf
+
+	DBSelectArea(cTable)
+	DBGoTo(nRecno)
+
+	//Valida se o registro posicionado está ok
+	If Recno() <> nRecno
+		::lRet := .F.
+		::cError := "Não foi possivel posicionar no registro informado!"
+
+		Return ::lRet
+	EndIf
+
+	oStructGen := FWFormStruct(1, cTable)
+	oModelGen := MPFormModel():New("GEN_TABLE") 
+ 	oModelGen:AddFields('MASTERGEN',,oStructGen)
+
+	oModelGen:SetOperation(4)
+
+	oModelGen:SetPrimaryKey({})
+	oModelGen:Activate()
+
+	For nX := 1 to Len(aData)
+		xContent := ::convertContent(aData[nX][1], aData[nX][2])
+		oModelGen:SetValue('MASTERGEN', aData[nX][1], xContent)
+	Next
+	
+	If !oModelGen:VldData()
+		
+		::lRet := .F.
+		aErr := oModelGen:GetErrorMessage()
+
+		::cError := aErr[6]
+
+		oModelGen:DeActivate()
+		oModelGen:Destroy()
+
+		Return ::lRet
+		
+	EndIf
+
+	::lRet := .T.
+
+	oModelGen:CommitData()
+
+	oModelGen:DeActivate()
+	oModelGen:Destroy()
+        
+    //DBCloseArea()
+
+Return ::lRet
+
+Method GenericGet(cTable, cKey) Class ONFLYEXEC
+
+	::resetResult()
+
+	If cKey == Nil 
+		::cError := "Chave inválida"
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	cOrigin := ::GetTableName(cTable)
+	If cTable <> cOrigin
+		::cError := "Tabela diferente da informada: Esperado: " + cOrigin + " / Informado: " + cTable
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	DbSelectArea(cTable)
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+
+		::lRet := .T.
+
+		::aRet := ::GetRecord()
+
+		Return ::aRet
+		
+	EndIf
+
+	::lRet := .F.
+
+Return ::aRet
+
+
+////////////// Obter dados da classe //////////////
+
+Method GetErrors() Class ONFLYEXEC
+Return ::cError
+
+Method GetStatus() Class ONFLYEXEC
+Return ::lRet
+
+Method GetResult() Class ONFLYEXEC
+Return ::aRet
+
+////////////// Fornecedor //////////////
+
+Method supplierQuery(cDoc, cEmail) Class ONFLYEXEC
+
+	Default cDoc := ""
+	Default cEmail := ""
+
+	Local aSelect := {"A2_COD", "A2_LOJA", "A2_NOME", "A2_CGC", "A2_EMAIL"}
+    Local aWhere  := {;
+		{"D_E_L_E_T_", "=", ""},;
+		{"A2_FILIAL", "=", FWxFilial("SA2")},;
+		{"A2_MSBLQL", "<>", 1}} 
+
+	If Len(Alltrim(cEmail)) > 0
+		AAdd(aWhere, {"UPPER(TRIM(A2_EMAIL))", "=", Upper(Alltrim(cEmail))})
+    EndIf
+
+    If Len(Alltrim(cDoc)) > 0
+		AAdd(aWhere, {"A2_CGC", "=", Alltrim(cDoc)})
+    EndIf
+
+	cQuery := ::GenericQuery("SA2", aSelect, aWhere)
+
+Return cQuery
+
+Method getRecords(cAlias) Class ONFLYEXEC
+
+    While (cAlias)->(!Eof())
+
+		aItem := (cAlias)->(::GetRecord())
+
+		AAdd(::aRet, aItem)
+		
+		(cAlias)->(DbSkip())
+	
+	End
+
+    (cAlias)->(DbCloseArea())
+
+Return ::aRet
+
+Method GetSupplierByDocument(cDoc) Class ONFLYEXEC
+
+	::resetResult()
+
+	cQuery := ::supplierQuery(cDoc)
+    cAlias := ::queryToAlias(cQuery)
+	::aRet := ::getRecords(cAlias)
+
+Return ::aRet
+
+Method GetSupplierByEmail(cEmail) Class ONFLYEXEC
+
+	::resetResult()
+
+	cQuery := ::supplierQuery(nil, cEmail)
+    cAlias := ::queryToAlias(cQuery)
+	::aRet := ::getRecords(cAlias)
+
+Return ::aRet
+
+Method InsertSupplier(aData) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local nX := 1
+
+	oModel := FWLoadModel('MATA020')
+
+	oModel:SetOperation(3)
+	oModel:Activate()
+
+	For nX := 1 to Len(aData)
+		xContent := ::convertContent(aData[nX][1], aData[nX][2])
+		oModel:SetValue('SA2MASTER', aData[nX][1], xContent)
+	Next
+
+	If !oModel:VldData()
+		
+		::lRet := .F.
+		aErr := oModel:GetErrorMessage()
+
+		::cError := aErr[6]
+
+		oModel:DeActivate()
+		oModel:Destroy()
+
+		Return ::lRet
+		
+	EndIf
+
+	::lRet := .T.
+
+	oModel:CommitData()
+
+	oModel:DeActivate()
+	oModel:Destroy()
+	
+Return ::lRet
+
+////////////// Título a Pagar //////////////
+
+Method InsertPayable(aData) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local aArray := {}
+	Local nX, nY := 1
+	Local nI := 1
+	Local lPaMovBco := .T.
+	
+	Local aMultiNat := {}
+	Local aRatEvEz := {}
+	
+	Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+
+	Public nOnfChqAdt  := 2
+	Public nOnfMovSChq := 1
+	
+	Begin Transaction
+
+		For nX := 1 to Len(aData)
+
+			If aData[nX][1] == "MOVIMENTACAO_BANCARIA"
+				lPaMovBco := aData[nX][2]
+				Loop
+			EndIf
+
+			If aData[nX][1] == "MULTI_NATUREZA"
+				aMultiNat := aData[nX][2]
+
+				For nY := 1 to Len(aMultiNat)
+					
+					aAuxEv := {}
+
+					For nI := 1 to Len(aMultiNat[nY])
+						aNovoFor := aMultiNat[nY][nI]
+
+						If Valtype(aNovoFor[1]) == "A"
+							//TODO: Implementado um único centro de custo dentro do rateio de multinatureza
+							//Caso necessite de mais, necessário ajustar os arrays aRatEz e aNovoFor
+						 	aRatEz := {}
+							AAdd(aRatEz, aNovoFor)
+							Aadd(aAuxEv,{"AUTRATEICC", aRatEz, Nil})
+						Else
+							//Removida a tratativa de incluir o array inteiro
+							Aadd(aAuxEv, aNovoFor)
+						EndIf
+
+					Next nI
+
+					Aadd(aRatEvEz, aAuxEv)
+
+				Next nY
+
+				aItem := {"AUTRATEEV", aRatEvEz, Nil}
+				Aadd(aArray, aItem)
+
+				Loop
+			EndIf
+
+			xContent := ::convertContent(aData[nX][1], aData[nX][2])
+			aItem := {aData[nX][1], xContent, Nil}
+			Aadd(aArray, aItem)
+
+		Next nX
+
+		aArray := FWVetByDic(aArray, "SE2")
+
+		AcessaPerg("FINA050", .F.)
+
+		//Parametros para geração do movimento bancário		
+		If lPaMovBco
+			nOnfChqAdt  := 2  //-- Gera Chq. para Adiantamento = Não (mv_par05)
+			nOnfMovSChq := 1  //-- Gera movimento sem cheque = Sim (mv_par09)
+		Else
+			//Se usar CNAB
+			nOnfChqAdt  := 2  //-- Gera Chq. para Adiantamento = Não (mv_par05)
+			nOnfMovSChq := 2  //-- Gera movimento sem cheque = Não (mv_par09)
+		EndIf
+
+		MsExecAuto( { |x,y| FINA050(x,y, ,,,,,,,, /*lPaMovBco*/,,)}, aArray, 3)
+
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a inclusão do título a pagar"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		Endif
+
+		::lRet := .T.
+
+	End Transaction
+	
+Return ::lRet
+
+Method GetPayable(cTable, cKey) Class ONFLYEXEC
+
+	::resetResult()
+
+	If cKey == Nil 
+		::cError := "Chave inválida"
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	cOrigin := ::GetTableName("SE2")
+	If cTable <> cOrigin
+		::cError := "Tabela diferente da informada: Esperado: " + cOrigin + " / Informado: " + cTable
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	DbSelectArea("SE2")
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+
+		::lRet := .T.
+
+		::aRet := SE2->(::GetRecord())
+
+		Return ::aRet
+		
+	EndIf
+
+	::lRet := .F.
+
+Return ::aRet
+
+Method GetPayableKeyFromDocument(cTable, cKey) Class ONFLYEXEC
+
+	::resetResult()
+
+	If cKey == Nil 
+		::cError := "Chave inválida"
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	cOrigin := ::GetTableName("SF1")
+	If cTable <> cOrigin
+		::cError := "Tabela diferente da informada: Esperado: " + cOrigin + " / Informado: " + cTable
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	DbSelectArea("SF1")
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+
+		cPref := GetMV("MV_2DUPREF")
+
+    	cKeySE2 := SF1->(;
+			FWxFilial("SE2");
+			+ &cPref;
+			+ F1_DOC;
+			+ Space(TamSX3("E2_PARCELA")[1]);
+			+ Left(F1_ESPECIE,TamSX3("E2_TIPO")[1]);
+			+ F1_FORNECE;
+			+ F1_LOJA;
+		)
+
+		DbSelectArea("SE2")
+		DbSetOrder(1)
+
+		If DbSeek(cKeySE2)
+
+			::lRet := .T.
+
+			::aRet := SE2->(::GetRecord())
+
+			Return ::aRet
+			
+		EndIf
+		
+	EndIf
+
+	::lRet := .F.
+
+Return ::aRet
+
+Method ExecutePayable(cKey, dDate, cCodePayment, cBank, cBankBranch, cBankAccount, nAmount) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local aTit := {}
+	Private lMsErroAuto := .F.
+    Private lAutoErrNoFile := .T.
+
+	DbSelectArea("SE2")
+    DbSetOrder(1)
+
+    If !DbSeek(cKey)
+		::lRet := .F.
+		::cError := "Título não localizado para baixa"
+		Return ::lRet
+	EndIf
+
+	AAdd(aTit, {"E2_NUM",      SE2->E2_NUM,     Nil})
+	AAdd(aTit, {"E2_PREFIXO",  SE2->E2_PREFIXO, Nil})
+	AAdd(aTit, {"E2_PARCELA",  SE2->E2_PARCELA, Nil})
+	AAdd(aTit, {"E2_TIPO",     SE2->E2_TIPO,    Nil})
+	AAdd(aTit, {"E2_FORNECE",  SE2->E2_FORNECE, Nil})
+	AAdd(aTit, {"E2_LOJA",     SE2->E2_LOJA,    Nil})
+	AAdd(aTit, {"AUTMOTBX",    cCodePayment,    Nil})
+	
+	AAdd(aTit, {"AUTBANCO",    Padr(cBank, TamSX3("A6_COD")[1]), Nil})
+	AAdd(aTit, {"AUTAGENCIA",  Padr(cBankBranch, TamSX3("A6_AGENCIA")[1]), Nil})
+	AAdd(aTit, {"AUTCONTA",    Padr(cBankAccount, TamSX3("A6_NUMCON")[1]), Nil})
+	
+	AAdd(aTit, {"AUTDTBAIXA",  dDate, Nil}) //Data da baixa
+	AAdd(aTit, {"AUTDTCREDITO",dDate, Nil}) //Data do credito em conta corrente
+	//AAdd(aTit, {"AUTHIST",     "",Nil })
+	//AAdd(aTit, {"AUTDESCONT",  0, Nil}) //Valores de desconto
+	//AAdd(aTit, {"AUTACRESC",   0, Nil}) //Valores de acrescimo - cadastrado no titulo previamente
+	//AAdd(aTit, {"AUTDECRESC",  0, Nil}) //Valore de decrescimo - cadastrado no titulo previamente
+	//AAdd(aTit, {"AUTMULTA",    0, Nil}) //Valores de multa
+	//AAdd(aTit, {"AUTJUROS",    0, Nil}) //Valores de Juros
+	AAdd(aTit, {"AUTVLRPG",   nAmount, Nil}) //Valor recebido
+	
+
+	Begin Transaction
+
+		AcessaPerg("FIN080", .F.)
+		MSExecAuto({|x,y| FINA080(x,y)}, aTit, 3)
+
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a baixa dos títulos a pagar"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		EndIf
+
+		::lRet := .T.
+
+    End Transaction
+
+Return ::lRet
+
+Method PaymentClearing(aPay, aNDF, dDateClearing) Class ONFLYEXEC
+
+	::resetResult()
+
+	//Local aContabil := {}
+    Local bBlock    := Nil
+    Local aEstorno  := {}
+    Local nSldComp  := 0
+    Local nTaxaPA   := 0
+    Local nTaxaNF   := 0
+    Local nHdl      := 0
+    Local nOperacao := 0
+    Local aRecSE5   := {}
+    Local aNDFDados := {}
+    Local lHelp     := .F.
+	
+    Private lAutoErrNoFile := .T.
+
+	Pergunte("AFI340", .F.)
+	lContabiliza := MV_PAR11 == 1
+	lAglutina := MV_PAR08 == 1
+	lDigita := MV_PAR09 == 1
+
+	Begin Transaction
+	
+		::lRet := FinCmpAut(aPay, aNDF, {lContabiliza, lAglutina, lDigita}, bBlock, aEstorno, nSldComp, dDateClearing, nTaxaPA, nTaxaNF, nHdl, nOperacao, aRecSE5, aNDFDados, lHelp)
+		
+		If !::lRet
+
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a compensação entre os títulos"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+		EndIf
+
+    End Transaction
+
+Return ::lRet
+
+////////////// Geração de Faturas a Pagar //////////////
+Method InsertPaymentInvoice(aRecnoPay, aInvoiceData) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local aTits :={}
+	Local aFatPag := Array(15)
+	Local nI := 1
+	Local nDecresc := 0
+	Local nAcresc := 0
+
+	Private lMsErroAuto := .F.
+
+	//Localiza os títulos a pagar e adiciona no array responsável pela geração da fatura
+	DbSelectArea("SE2")
+	For nI := 1 to Len(aRecnoPay)	
+
+		//TODO: Validar se o título foi encontrado
+		SE2->(DBGoTo(aRecnoPay[nI]))
+
+		//ARRAY com os titulos da fatura - Geradores (esses títulos devem existir na base)
+		//[1] Prefixo
+		//[2] Numero
+		//[3] Parcela
+		//[4] Tipo
+		//[5] Título localizado na geracao de fatura (lógico). Iniciar com falso.
+		//[6] Fornecedor
+		//[7] Loja
+		//[8] Filial (utilizada em fatura de títulos de diferentes filiais)
+		AAdd(aTits, {;
+			SE2->E2_PREFIXO,; 
+			SE2->E2_NUM,; 
+			SE2->E2_PARCELA,;
+			SE2->E2_TIPO,;
+			.F.,;
+			SE2->E2_FORNECE,;
+			SE2->E2_LOJA;
+		})
+
+		//Valor de decrescimo
+		nDecresc += SE2->E2_DESCONT
+
+	Next nI
+
+
+	//Descricao do Array aFatPag
+	//[01] - Prefixo
+	//[02] - Tipo
+	//[03] - Numero da Fatura (se o numero estiver em branco obtem pelo FINA290)
+	//[04] - Natureza
+	//[05] - Data de
+	//[06] - Data Ate
+	//[07] - Fornecedor
+	//[08] - Loja
+	//[09] - Fornecedor para geracao
+	//[10] - Loja do fornecedor para geracao
+	//[11] - Condicao de pagto
+	//[12] - Moeda
+	//[13] - ARRAY com os titulos da fatura - Geradores
+	//[14] - Valor de decrescimo
+	//[15] - Valor de acrescimo
+	For nI := 1 to Len(aInvoiceData)
+		cField := aInvoiceData[nI][1]
+		cValue := ::convertContent(cField, aInvoiceData[nI][2])
+
+		aFatPag[3] := ""
+		aFatPag[13] := aTits
+		aFatPag[14]	:= nDecresc
+		aFatPag[15]	:= nAcresc
+
+		Do Case 
+			Case cField == "E2_PREFIXO" 
+				aFatPag[1] := cValue
+			Case cField == "E2_TIPO"
+				aFatPag[2] := cValue
+			Case cField == "E2_NUM"
+				aFatPag[3] := cValue
+			Case cField == "E2_NATUREZ"
+				aFatPag[4] := cValue
+			Case cField == "E2_EMISSAO"
+				aFatPag[5] := cValue
+				aFatPag[6] := cValue
+			Case cField == "E2_FORNECE"
+				aFatPag[7] := cValue
+				aFatPag[9] := cValue
+			Case cField == "E2_LOJA"
+				aFatPag[8] := cValue
+				aFatPag[10] := cValue
+			Case cField == "CONDPAG"
+				aFatPag[11] := cValue
+			Case cField == "E2_MOEDA"
+				aFatPag[12] := cValue
+		EndCase
+		
+	Next nI
+
+	Begin Transaction
+
+		MsExecAuto( { |x,y| FINA290(x,y)}, 3, aFatPag )
+
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a geração da fatura a pagar"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		Endif
+
+		::lRet := .T.
+
+	End Transaction
+	
+Return ::lRet
+
+////////////// Documento de Entrada //////////////
+
+Method InsertSupplierInvoice(aDoc, aItems) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local nX := 1
+	Local nY := 1
+	Local lFilCab := .F.
+	Local lFilItem := .F.
+	Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+
+	//Cabeçalho
+	aCab := {}
+	
+	For nX := 1 to Len(aDoc)
+
+		If aDoc[nX][1] == "F1_FILIAL"
+			lFilCab := .T.
+		EndIf
+
+		xContent := ::convertContent(aDoc[nX][1], aDoc[nX][2])
+		aData := {aDoc[nX][1], xContent, Nil}
+		Aadd(aCab, aData)
+
+	Next nX
+
+	If !lFilCab
+		AAdd(aCab, {"F1_FILIAL", FWxFilial("SF1"), Nil})
+	EndIf
+
+	aCab := FWVetByDic(aCab, "SF1")
+
+	//Itens
+	aItemLines := {}
+
+	For nX := 1 to Len(aItems)
+
+		lFilItem := .F.
+
+		aDataItems := aItems[nX]
+		aItem := {}
+
+		For nY := 1 to Len(aDataItems)
+			xContent := ::convertContent(aDataItems[nY][1], aDataItems[nY][2])
+			aItemContent := {aDataItems[nY][1], xContent, Nil}
+			Aadd(aItem, aItemContent)
+		Next nY
+
+		If !lFilItem
+			AAdd(aItem, {"D1_FILIAL", FWxFilial("SD1"), Nil})
+		EndIf
+
+		AAdd(aItem, {"D1_ITEM", StrZero(nX, 4), Nil})
+
+		AAdd(aItemLines, aItem)
+		
+	Next nX
+
+	aItens := aItemLines
+	aItens := FWVetByDic(aItens, "SD1", .T. )
+
+	If Len(aCab) == 0 .Or. Len(aItens) == 0
+		::lRet := .F.
+		::cError := "Informações faltantes para geração do Documento de Entrada. Cabeçalho: " + cValToChar(Len(aCab)) + " | Itens: " + cValToChar(Len(aItens))
+		Return ::lRet
+	EndIf
+
+	Begin Transaction
+
+		lExec := .T.
+        nModulo := 4
+
+		nOpc := 3	//Inclusão
+
+		aParamAux := {}
+        AAdd(aParamAux, {"MV_PAR01", 2}) //-- Mostra Lanc. Contabil? 1 = Sim, 2 = Não
+        AAdd(aParamAux, {"MV_PAR06", 2}) //-- Contabilizacao Online? 1 = Sim, 2 = Não
+
+		aItensRat := {}
+        aCodRet := {}
+
+        MSExecAuto({ |x,y,z,k,a,b| MATA103(x,y,z,,,,k,a,,,b)}, aCab, aItens, nOpc, aParamAux, aItensRat, aCodRet)
+
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a inclusão do documento de entrada"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		Endif
+
+		::lRet := .T.
+
+	End Transaction
+Return ::lRet
+
+Method GetSupplierInvoice(cTable, cKey) Class ONFLYEXEC
+
+	::resetResult()
+
+	If cKey == Nil 
+		::cError := "Chave inválida"
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	cOrigin := ::GetTableName("SF1")
+	If cTable <> cOrigin
+		::cError := "Tabela diferente da informada: Esperado: " + cOrigin + " / Informado: " + cTable
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	DbSelectArea("SF1")
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+
+		::lRet := .T.
+
+		::aRet := SF1->(::GetRecord())
+
+		Return ::aRet
+		
+	EndIf
+
+	::lRet := .F.
+
+Return ::lRet
+
+////////////// Pré - Documento de Entrada //////////////
+
+Method InsertSupplierPreInvoice(aDoc, aItems) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local nX := 1
+	Local nY := 1
+	Local lFilCab := .F.
+	Local lFilItem := .F.
+	Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+
+	//Cabeçalho
+	aCab := {}
+	
+	For nX := 1 to Len(aDoc)
+
+		If aDoc[nX][1] == "F1_FILIAL"
+			lFilCab := .T.
+		EndIf
+
+		xContent := ::convertContent(aDoc[nX][1], aDoc[nX][2])
+		aData := {aDoc[nX][1], xContent, Nil}
+		Aadd(aCab, aData)
+
+	Next nX
+
+	If !lFilCab
+		AAdd(aCab, {"F1_FILIAL", FWxFilial("SF1"), Nil})
+	EndIf
+
+	aCab := FWVetByDic(aCab, "SF1")
+
+
+	//Itens
+	aItemLines := {}
+
+	For nX := 1 to Len(aItems)
+
+		lFilItem := .F.
+
+		aDataItems := aItems[nX]
+		aItem := {}
+
+		For nY := 1 to Len(aDataItems)
+			xContent := ::convertContent(aDataItems[nY][1], aDataItems[nY][2])
+			aItemContent := {aDataItems[nY][1], xContent, Nil}
+			Aadd(aItem, aItemContent)
+		Next nY
+
+		If !lFilItem
+			AAdd(aItem, {"D1_FILIAL", FWxFilial("SD1"), Nil})
+		EndIf
+
+		AAdd(aItem, {"D1_ITEM", StrZero(nX, 4), Nil})
+
+		AAdd(aItemLines, aItem)
+		
+	Next nX
+
+	aItens := aItemLines
+	aItens := FWVetByDic(aItens, "SD1", .T. )
+
+	If Len(aCab) == 0 .Or. Len(aItens) == 0
+		::lRet := .F.
+		::cError := "Informações faltantes para geração da Pré nota de Entrada. Cabeçalho: " + cValToChar(Len(aCab)) + " | Itens: " + cValToChar(Len(aItens))
+		Return ::lRet
+	EndIf
+
+	Begin Transaction
+
+		lExec := .T.
+        nModulo := 4
+
+		nOpc := 3	//Inclusão
+
+        MSExecAuto({ |x,y,z,a,b| MATA140(x,y,z,a,b)}, aCab, aItens, nOpc)
+
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a inclusão da pré nota de entrada"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		Endif
+
+		::lRet := .T.
+
+	End Transaction
+Return ::lRet
+
+////////////// Pedido de Compra //////////////
+
+Method InsertPurchaseOrder(aInfo, aItems) Class ONFLYEXEC
+
+	::resetResult()
+
+	Local nX := 1
+	Local nY := 1
+	Local lFilCab := .F.
+	Local lFilItem := .F.
+	Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+
+	//Cabeçalho
+	aCab := {}
+	
+	For nX := 1 to Len(aInfo)
+
+		If aInfo[nX][1] == "C7_FILIAL"
+			lFilCab := .T.
+		EndIf
+
+		xContent := ::convertContent(aInfo[nX][1], aInfo[nX][2])
+		aData := {aInfo[nX][1], xContent, Nil}
+		Aadd(aCab, aData)
+
+	Next nX
+
+	If !lFilCab
+		AAdd(aCab, {"C7_FILIAL", FWxFilial("SC7"), Nil})
+	EndIf
+
+	aCab := FWVetByDic(aCab, "SC7")
+
+
+	//Itens
+	aItemLines := {}
+
+	For nX := 1 to Len(aItems)
+
+		lFilItem := .F.
+
+		aDataItems := aItems[nX]
+		aItem := {}
+
+		For nY := 1 to Len(aDataItems)
+			xContent := ::convertContent(aDataItems[nY][1], aDataItems[nY][2])
+			aItemContent := {aDataItems[nY][1], xContent, Nil}
+			Aadd(aItem, aItemContent)
+		Next nY
+
+		If !lFilItem
+			AAdd(aItem, {"C7_FILIAL", FWxFilial("SC7"), Nil})
+		EndIf
+
+		AAdd(aItem, {"C7_ITEM", StrZero(nX, 4), Nil})
+
+		AAdd(aItemLines, aItem)
+		
+	Next nX
+
+	aItens := aItemLines
+	aItens := FWVetByDic(aItens, "SC7", .T. )
+
+	If Len(aCab) == 0 .Or. Len(aItens) == 0
+		::lRet := .F.
+		::cError := "Informações faltantes para geração do Pedido de Compra. Cabeçalho: " + cValToChar(Len(aCab)) + " | Itens: " + cValToChar(Len(aItens))
+		Return ::lRet
+	EndIf
+
+	Begin Transaction
+
+		lExec := .T.
+        nModulo := 4
+
+		nOpc := 3	//Inclusão
+
+		MSExecAuto({ |k,v,w,x,y,z| MATA120(k,v,w,x,y,z)}, 1, aCab, aItens, nOpc)
+        
+		If lMsErroAuto
+
+			::lRet := .F.
+			
+			::getErrorsAutoProcessing()
+
+			If Len(::cError) == 0
+				::cError := "Erro ao realizar a inclusão do pedido de compra"
+			EndIf
+
+			DisarmTransaction()
+
+			Return ::lRet
+
+		Endif
+
+		::lRet := .T.
+
+	End Transaction
+Return ::lRet
+
+Method GetPurchaseOrder(cTable, cKey) Class ONFLYEXEC
+
+	::resetResult()
+
+	If cKey == Nil 
+		::cError := "Chave inválida"
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	cOrigin := ::GetTableName("SC7")
+	If cTable <> cOrigin
+		::cError := "Tabela diferente da informada: Esperado: " + cOrigin + " / Informado: " + cTable
+		::lRet := .F.
+		Return ::aRet
+	EndIf
+
+	DbSelectArea("SC7")
+    DbSetOrder(1)
+
+    If DbSeek(cKey)
+
+		::lRet := .T.
+
+		::aRet := SC7->(::GetRecord())
+
+		Return ::aRet
+		
+	EndIf
+
+	::lRet := .F.
+
+Return ::lRet
