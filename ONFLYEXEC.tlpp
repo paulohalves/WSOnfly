@@ -212,7 +212,12 @@ Method GenericQuery(cTable, aSelect, aWhere, nLimit, cOrder) Class ONFLYEXEC
 
 	//Query
 	cQuery := "SELECT {{TOPSQLSERVER}} " + CRLF
-	cQuery += cSelect + ", COALESCE(R_E_C_N_O_, NULL) RECNOKEY_ " + CRLF
+	cQuery += cSelect + " " + CRLF
+
+	If Len(cSelect) >= 3 .And. Upper(Left(cSelect,3)) <> "MAX"
+		cQuery += ", COALESCE(R_E_C_N_O_, NULL) RECNOKEY_ " + CRLF
+	EndIf
+
     cQuery += "FROM " + ::GetTableName(cTable) + " " + CRLF
     cQuery += cWhere + " " + CRLF
 
@@ -598,7 +603,7 @@ Method InsertPayable(aData) Class ONFLYEXEC
 			nOnfMovSChq := 2  //-- Gera movimento sem cheque = Não (mv_par09)
 		EndIf
 
-		MsExecAuto( { |x,y| FINA050(x,y, ,,,,,,,, /*lPaMovBco*/,,)}, aArray, 3)
+		MsExecAuto( { |x,y| FINA050(x,y, ,,,,,,,, /*lPaMovBco*/,,)}, aArray, 3, aRatEvEz)
 
 		If lMsErroAuto
 
