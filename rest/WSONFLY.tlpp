@@ -1,0 +1,1764 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "TOTVS.CH"
+
+/*
+	Attention: 
+		- Private methods in camelCase
+		- Public methods in PascalCase
+*/
+
+Class WSONFLY
+
+  Public Data cRet as Character
+
+  Public  Method New()
+  Private Method restReturn() as Logical
+
+  Private Method convertResponse(xContent)
+  Private Method convertContent(cField, xContent)
+  
+  Private Method insertPay(aArray) as Array
+  Private Method insertInvoicePay(aRecnoPayments, aArray) as Array
+  Private Method insertDoc(aDoc, aItems) as Array
+  Private Method insertPreDoc(aDoc, aItems) as Array
+  Private Method insertOrder(aDoc, aItems) as Array
+
+  Private Method objectToStruct(oJson) as Array 
+  Private Method transformDocumentInPurchaseOrder(aDoc, aItems) as Array
+  Private Method convertToPurchaseOrder(aDoc, aItems) as Array
+  
+  @Get(endpoint="/onfly/v1/status", description="Consulta o status de funcionamento do ambiente")
+  Public Method GetStatus() as Logical
+
+  @Get(endpoint="/onfly/v1/fornecedores", description="Consulta de fornecedor por e-mail ou documento (CPF/CNPJ, somente números)")
+  Public Method GetSupplier() as Logical
+
+
+  @Post(endpoint="/onfly/v1/titulo/pagar", description="Realiza a inclusão de um título a pagar")
+  Public Method InsertPayment() as Logical
+  
+  @Get(endpoint="/onfly/v1/titulo/pagar", description="Realiza a consulta do status do título a pagar")
+  Public Method GetPayment() as Logical
+  
+  @Post(endpoint="/onfly/v1/titulo/pagar/baixa", description="Realiza a baixa de um título a pagar")
+  Public Method ExecutePayment() as Logical
+
+  @Post(endpoint="/onfly/v1/titulo/pagar/compensacao", description="Realiza a compensação entre títulos a pagar (gerando NDF)")
+  Public Method PaymentClearing() as Logical
+
+
+  @Post(endpoint="/onfly/v1/fatura/pagar", description="Realiza a inclusão de títulos a pagar e fatura")
+  Public Method InsertPaymentInvoice() as Logical
+
+
+  @Post(endpoint="/onfly/v1/entrada/documento", description="Realiza a inclusão do documento de entrada")
+  Public Method InsertDocument() as Logical
+
+  @Get(endpoint="/onfly/v1/entrada/documento/titulo", description="Realiza a consulta do status do título baseado no índice do documento de entrada")
+  Public Method GetPayableKeyFromDocument() as Logical
+
+
+  @Get(endpoint="/onfly/v1/entrada/documento", description="Realiza a consulta de um documento de entrada")
+  @Get(endpoint="/onfly/v1/entrada/prenota", description="Realiza a consulta de uma pré-nota de entrada")
+  Public Method GetDocument() as Logical
+
+  @Post(endpoint="/onfly/v1/entrada/prenota", description="Realiza a inclusão de uma pré-nota de entrada")
+  Public Method InsertPreDocument() as Logical
+
+
+  @Post(endpoint="/onfly/v1/compras/pedido", description="Realiza a inclusão de um pedido de compra")
+  Public Method InsertPurchaseOrder() as Logical
+
+  @Get(endpoint="/onfly/v1/compras/pedido", description="Realiza a consulta de um pedido de compra")
+  Public Method GetPurchaseOrder() as Logical
+
+  @Post(endpoint="/onfly/v1/query/select", description="Realiza um select diretamente no banco de dados")
+  Public Method QuerySelect() as Logical
+
+  @Post(endpoint="/onfly/v1/query/select/nextcode", description="Realiza um select diretamente no banco de dados e retorna o próximo código disponível")
+  Public Method GenerateNextCodeByQuerySelect() as Logical
+
+  @Post(endpoint="/onfly/v1/generic/insert", description="Realiza a inclusão do registro em uma tabela utilizando o padrão MVC")
+  Public Method GenericInsert() as Logical
+
+  @Post(endpoint="/onfly/v1/generic/update", description="Realiza a alteração do registro de uma tabela utilizando o padrão MVC")
+  Public Method GenericUpdate() as Logical
+
+  @Get(endpoint="/onfly/v1/calc/workday/:date/:days", description="Adiciona dias úteis em uma data")
+  Public Method AddWorkdayInDate() as Logical
+
+  @Get(endpoint="/onfly/v1/generic/nextcode/:code", description="Retorna o próximo código baseado no item enviado")
+  Public Method GenerateNextCode() as Logical
+
+  @Get(endpoint="/onfly/v1/generic/server/info", description="Retorna informações do servidor")
+  Public Method GetServerInfo() as Logical
+
+  @Get(endpoint="/onfly/v1/generic/rpo/source_code/:name", description="Retorna as informações de um fonte compilado no RPO")
+  Public Method GetSourceCodeInfo() as Logical
+
+  @Get(endpoint="/onfly/v1/generic/rpo/find/source_code/:name", description="Retorna as informações de um fonte compilado no RPO")
+  Public Method FindSourceCode() as Logical
+
+EndClass
+
+/////////////////   /////////////////
+Method New() Class WSONFLY
+
+	::cRet := ""
+
+Return Self
+
+Method restReturn(nStatus, cResponse, lRet) Class WSONFLY
+
+  DEFAULT lRet := .T.
+
+  Local cHeader := '{"Content-Type":"application/json;charset=utf-8"}'
+  jHeaders := JsonObject():New()
+  jHeaders:fromJson(cHeader)
+  oRest:setHeaderResponse(jHeaders)
+
+  oRest:setStatusCode(nStatus)
+  oRest:setResponse(cResponse)
+
+Return lRet
+
+Method GetStatus() Class WSONFLY
+
+  Local oResp := JsonObject():New()
+  Local oRet  := JsonObject():New()
+
+  oRet['empresa'] := cEmpAnt
+  oRet['filial'] := cFilAnt
+
+  oResp["data"] := oRet
+
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Fornecedores /////////////////
+Method GetSupplier() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local nI, nJ := 1
+
+  Local cDoc   := aParams["documento"]
+  Local cEmail := aParams["email"]
+  
+  Do Case
+    Case Len(Alltrim(cEmail)) > 0
+
+      cEmail := Upper(Alltrim(cEmail))
+      aSupplier := oOnfly:GetSupplierByEmail(cEmail)
+    
+    Case Len(Alltrim(cDoc)) > 0
+    
+      cDoc := Alltrim(cDoc)
+      aSupplier := oOnfly:GetSupplierByDocument(cDoc)
+    
+    OtherWise
+
+      Return ::restReturn(412, '{"status": "Parametros não informados (email, documento)"}')
+  
+  EndCase
+
+  //Se não existir registro
+  If Len(aSupplier) == 0
+
+    Return ::restReturn(400, '{"status": "Fornecedor não encontrado"}')
+
+  EndIf
+
+
+  //Resposta da consulta
+  oResp["data"] := {}
+    
+  For nI := 1 to Len(aSupplier)
+  
+    oSupplier := JsonObject():New()
+    
+    For nJ := 1 to Len(aSupplier[nI])
+    
+      oSupplier[aSupplier[nI][nJ][1]] := ::convertResponse(aSupplier[nI][nJ][2])
+      
+    Next nJ
+
+    AAdd(oResp["data"], oSupplier)
+  
+  Next nI
+
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Títulos a Pagar /////////////////
+Method InsertPayment() Class WSONFLY
+  
+  Local aArray := {}
+  Local jHeader := oRest:getHeaderRequest()
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local nI, nJ, nK, nL := 1
+  Local aItems := {}
+  Local dDataBkp := dDataBase
+
+  // Altera a data do sistema para a data informada no hearder da requisicao. Guilherme Lopes 10/12/24
+  If ValType(jHeader['dDataBase']) == "C"
+    dDataBase := StoD(jHeader['dDataBase'])
+  EndIf
+  
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+  For nI := 1 to Len(aArray)
+    If aArray[nI][1] == "MULTI_NATUREZA"
+
+      aObjItems := aArray[nI][2]
+      For nJ := 1 to Len(aObjItems)
+        
+        aObjItemsInternal := ::objectToStruct(aObjItems[nJ])
+
+        //conOut(varInfo("aObjItemsInternal",aObjItemsInternal))
+
+        aMultiNat := {}
+        
+        For nK := 1 to Len(aObjItemsInternal)
+          //conOut(varInfo("aObjItemsInternal[nK]",aObjItemsInternal[nK]))
+          //conOut(varInfo("aMultiNat",aMultiNat))
+          
+          aMultiCC := {}
+          If aObjItemsInternal[nK][1] == "AUTRATEICC"
+
+            For nL := 1 to Len(aObjItemsInternal[nK][2])
+              aObjMultCC := ::objectToStruct(aObjItemsInternal[nK][2][nL])
+              AAdd(aMultiNat, aObjMultCC)
+            Next nL
+            
+          Else
+            AAdd(aMultiNat, aObjItemsInternal[nK])
+          EndIf
+          
+        Next nK
+
+        AAdd(aItems, aMultiNat)
+            
+      Next nJ
+
+      aArray[nI][2] := aItems
+    EndIf
+  Next nI
+
+  aRet := ::insertPay(aArray)
+
+  // Retorna a data base. Guilherme Lopes 10/12/24
+  dDataBase := dDataBkp
+
+  If aRet[1]
+
+    oResp["status"] := "Título a pagar adicionado com sucesso!"
+    oResp["index"]  := aRet[2]
+    aKey := StrTokArr(oResp["index"], "_")
+
+    aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+    
+    //Resposta da consulta
+    oPay := JsonObject():New()
+    
+    For nI := 1 to Len(aRetPay)
+        oPay[aRetPay[nI][1]] := ::convertResponse(aRetPay[nI][2])
+    Next nJ
+
+    oResp["data"] := oPay
+
+    Return ::restReturn(200, oResp:toJSON())
+
+  Else
+    Return ::restReturn(500, aRet[3])
+  EndIf
+
+Return .F.
+
+Method GetPayment() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local nI      := 1
+  Local cTable  := ""
+
+  Local cKey := aParams["index"]
+
+  //Verifica se os parametros foram passados
+  If Len(Alltrim(cKey)) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (index)"}')
+  EndIf
+
+  //Busca informações do título
+  aKey := StrTokArr(cKey, "_")
+  cTable := substr(aKey[1],1,3)
+
+  If cTable == "SF1"
+    Return ::GetPayableKeyFromDocument()
+  EndIf
+
+  aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+
+  //Se não existir registro
+  If Len(aRetPay) == 0
+    Return ::restReturn(400, '{"status": "Título a Pagar não encontrado"}')
+  EndIf
+    
+  //Resposta da consulta
+  oResp["index"] := cKey
+  oPay := JsonObject():New()
+  
+  For nI := 1 to Len(aRetPay)
+      oPay[aRetPay[nI][1]] := ::convertResponse(aRetPay[nI][2])
+  Next nJ
+
+  oResp["data"] := oPay
+  
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+Method ExecutePayment() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local cBody   := oRest:getBodyRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oJson   := JsonObject():New()
+
+  Local cKey := aParams["index"]
+
+  //Verifica se os parametros foram passados
+  If Len(Alltrim(cKey)) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (index)"}')
+  EndIf
+
+  //Busca informações do título
+  aKey := StrTokArr(cKey, "_")
+  aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+
+  //Se não existir registro
+  If Len(aRetPay) == 0
+    Return ::restReturn(400, '{"status": "Título a Pagar não encontrado"}')
+  EndIf
+
+  oJson:FromJson(cBody)
+
+  dDate := ::convertContent("E5_DATA", oJson:GetJsonObject("E5_DATA"))
+  cBank := ::convertContent("E5_BANCO", oJson:GetJsonObject("E5_BANCO"))
+  cBankBranch := ::convertContent("E5_AGENCIA", oJson:GetJsonObject("E5_AGENCIA"))
+  cBankAccount := ::convertContent("E5_CONTA", oJson:GetJsonObject("E5_CONTA"))
+  nAmount := ::convertContent("E5_VALOR", oJson:GetJsonObject("E5_VALOR"))
+  cCodePayment := ::convertContent("E5_MOTBX", oJson:GetJsonObject("E5_MOTBX"))
+
+  lRet := oOnfly:ExecutePayable(aKey[2], dDate, cCodePayment, cBank, cBankBranch, cBankAccount, nAmount)
+
+  If !lRet
+    Return ::restReturn(400, oOnfly:GetErrors())
+  EndIf
+
+  Return ::restReturn(200, '{"status": "Baixa do título a pagar realizada com sucesso!"}')
+  
+Return .F.
+
+Method GetPayableKeyFromDocument() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local nI      := 1
+
+  Local cKey := aParams["index"]
+  
+  //Verifica se os parametros foram passados
+  If Len(Alltrim(cKey)) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (index)"}')
+  EndIf
+
+  //Busca informações do documento
+  aKey := StrTokArr(cKey, "_")
+  aRetPay := oOnfly:GetPayableKeyFromDocument(aKey[1], aKey[2])
+
+  //Se não existir registro
+  If Len(aRetPay) == 0
+    Return ::restReturn(400, '{"status": "Título não localizado"}')
+  EndIf
+    
+  //Resposta da consulta
+  cKeySE2 := oOnfly:GetTableName("SE2") + "_" + oOnfly:GetUniqueKey("SE2")
+
+  oResp["index"] := cKeySE2
+  oDoc := JsonObject():New()
+  
+  For nI := 1 to Len(aRetPay)
+      oDoc[aRetPay[nI][1]] := ::convertResponse(aRetPay[nI][2])
+  Next nJ
+
+  oResp["data"] := oDoc
+  
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Fatura - Títulos a Pagar /////////////////
+Method InsertPaymentInvoice() Class WSONFLY
+  
+  Local aArray := {}
+  Local aArray2 := {}
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local nI, nJ, nK := 1
+  Local aItem := {}
+  Local aItems := {}
+  Local aFinalItems := {}
+  Local nItem := 0
+  Local aPay := {}
+  Local aPayments := {}
+  Local aInsertedPayments := {}
+  Local aRecnoPayments := {}
+  Local aRequired := {"CONDPAG","E2_PREFIXO","E2_TIPO","E2_NUM","E2_NATUREZ","E2_EMISSAO","E2_FORNECE","E2_LOJA","E2_MOEDA"}
+  
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+  
+  //Localiza os títulos que serão criados
+  For nI := 1 to Len(aArray)
+  
+    If aArray[nI][1] == "ITENS"
+      aItems := aArray[nI][2]
+      nItem := nI
+
+      Loop
+    End
+
+    AAdd(aArray2, aArray[nI])
+
+  Next nI
+
+  If Len(aItems) == 0
+    Return ::restReturn(412, '{"status": "Elemento ITENS não localizado no array de títulos"}')
+  EndIf
+
+  //Valida se todos os campos obrigatórios foram informados
+  For nI := 1 to Len(aRequired)
+    cField := aRequired[nI]
+    lFind := .F.
+
+    For nJ := 1 to Len(aArray)
+      If aArray[nJ][1] == cField
+        lFind := .T.
+        exit
+      End
+    Next nJ
+
+    If !lFind
+      Return ::restReturn(412, '{"status": "Campo obrigatório não informado: ' + cField + '"}')
+    EndIf
+
+  Next nI
+
+  //Ajusta o array de títulos, transformando os objetos faltantes em arrays
+  For nI := 1 To Len(aItems)
+    aItem := ::objectToStruct(aItems[nI])
+    AAdd(aFinalItems, aItem)
+  Next nI
+
+  //Gera o array dos títulos a pagar
+  For nJ := 1 to Len(aFinalItems)
+
+    aPay := {}
+
+    For nK := 1 to Len(aFinalItems[nJ])
+      AAdd(aPay, aFinalItems[nJ][nK])
+    Next nK
+
+    For nK := 1 to Len(aArray2)
+
+      If aArray2[nK][1] == "E2_TIPO" .Or. aArray2[nK][1] == "E2_NATUREZ" .Or. aArray2[nK][1] == "CONDPAG"
+        Loop
+      EndIf
+
+      AAdd(aPay, aArray2[nK])
+    Next nK
+
+    AAdd(aPayments, aPay)
+
+  Next nJ
+
+  //Transação para garantir que todos os títulos serão criados
+  Begin Transaction
+    For nI := 1 to Len(aPayments)
+
+      aRet := ::insertPay(aPayments[nI])
+  
+      If aRet[1]
+        AAdd(aInsertedPayments, aRet[2])
+
+        //Localiza o recno do título a pagar
+        aKey := StrTokArr(aRet[2], "_")
+        aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+        nRecnoPay := oOnfly:GetRecno("SE2", aKey[2])
+
+        AAdd(aRecnoPayments, nRecnoPay)
+      Else
+        DisarmTransaction()
+        Return ::restReturn(500, aRet[3])
+      EndIf
+
+    Next nI
+
+    //Cria a fatura
+    aRetInvoice := ::insertInvoicePay(aRecnoPayments, aArray2)
+
+    If !aRetInvoice[1]
+      DisarmTransaction()
+      Return ::restReturn(500, aRetInvoice[3])
+    EndIf
+    
+  End Transaction
+
+  oResp["status"] := "Fatura e títulos a pagar adicionados com sucesso!"
+  oResp["index"]  := aRetInvoice[2]
+  aKey := StrTokArr(oResp["index"], "_")  
+
+  aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+    
+  //Resposta da consulta
+  oPay := JsonObject():New()
+    
+  For nI := 1 to Len(aRetPay)
+      oPay[aRetPay[nI][1]] := ::convertResponse(aRetPay[nI][2])
+  Next nJ
+
+  oResp["data"] := oPay
+
+Return ::restReturn(200, oResp:toJSON())
+
+///////////////// Compensação /////////////////
+Method PaymentClearing() Class WSONFLY
+
+  Local aArray := {}
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local nI, nJ   := 1
+  Local lRet     := .F.
+
+  Local aKeyAdv := {}
+  Local aKeyRdv := {}
+  
+  Local aRecnoRdv := {}
+  Local aRecnoNDF := {}
+
+  Local lTypePA  := .F.
+  Local lBalance := .F.
+  Local aValidPA := {}
+
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+
+  //Distribui os índices em array
+  For nI := 1 to Len(aArray)
+    If aArray[nI][1] == "INDICES_ADIANTAMENTO"
+      aKeyAdv := aArray[nI][2]
+    ElseIf aArray[nI][1] == "INDICES_RELATORIO"
+      aKeyRdv := aArray[nI][2]
+    EndIf
+  Next nI
+
+  //Validação dos índices
+  If Len(aKeyAdv) == 0
+    Return ::restReturn(412, '{"status": "Ýndice do adiantamento não informada!"}')
+  EndIf
+
+  If Len(aKeyRdv) == 0
+    Return ::restReturn(412, '{"status": "Ýndice do relatório de despesas não informada!"}')
+  EndIf
+
+  //Verifica se o adiantamento existe
+  For nI := 1 to Len(aKeyAdv)
+    
+    aKey := StrTokArr(aKeyAdv[nI], "_")
+    aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+
+    If Len(aRetPay) == 0
+      Return ::restReturn(412, '{"status": "Ýndice do adiantamento ' + aKeyAdv[nI] + ' não localizada!"}')
+    EndIf
+
+    lTypePA  := .F.
+    lBalance := .F.
+    AAdd(aValidPA, .F.)
+
+    For nJ := 1 to Len(aRetPay)
+
+      If aRetPay[nJ][1] == "E2_SALDO" .And. aRetPay[nJ][2] > 0
+        lBalance := .T.
+      EndIf
+
+      If aRetPay[nJ][1] == "E2_TIPO" .And. Alltrim(aRetPay[nJ][2]) == "PA"
+        lTypePA := .T.
+        aValidPA[nI] := .T.
+      EndIf
+
+    Next nJ
+
+    If lBalance .And. !lTypePA
+      Return ::restReturn(412, '{"status": "Adiantamento ' + aKeyAdv[nI] + ' não baixado!"}')
+    EndIf
+
+  Next nI
+
+  //Verifica se o relatório de despesas existe
+  For nI := 1 to Len(aKeyRdv)
+    
+    aKey := StrTokArr(aKeyRdv[nI], "_")
+    aRetPay := oOnfly:GetPayable(aKey[1], aKey[2])
+
+    If Len(aRetPay) == 0
+      Return ::restReturn(412, '{"status": "Ýndice do relatório de despesa ' + aKeyRdv[nI] + ' não localizado!"}')
+    EndIf
+
+    lFindRdv := .F.
+
+    For nJ := 1 to Len(aRetPay)
+      If aRetPay[nJ][1] == "E2_SALDO" .And. aRetPay[nJ][2] > 0
+        lFindRdv := .T.
+        Exit
+      EndIf
+    Next nJ
+
+    If !lFindRdv
+      Return ::restReturn(412, '{"status": "Relatório de despesa ' + aKeyRdv[nI] + ' baixado anteriormente!"}')
+    EndIf
+
+    nRecnoRdv := oOnfly:GetRecno("SE2", aKey[2])
+    AAdd(aRecnoRdv, nRecnoRdv)
+
+  Next nI
+
+  //Gera os NDF dos adiantamentos e realiza a compensação
+  lLiberacao := SuperGetMV('MV_CTLIPAG', .F., .F.)
+
+  Begin Transaction
+  
+    //Gera o NDF
+    For nI := 1 to Len(aKeyAdv)
+
+      aKey := StrTokArr(aKeyAdv[nI], "_")
+      aRetAdv := oOnfly:GetPayable(aKey[1], aKey[2])
+
+      //Tratativa específica para o PA
+      If aValidPA[nI]
+        nRecnoPA := oOnfly:GetRecno("SE2", aKey[2])
+        AAdd(aRecnoNDF, nRecnoPA)
+        Loop
+      EndIf
+
+      aIncNDF := {}
+
+      For nJ := 1 to Len(aRetAdv)
+
+        aFields := {"E2_PREFIXO", "E2_NUM", "E2_TIPO", "E2_NATUREZ", "E2_FORNECE", "E2_LOJA", "E2_EMISSAO", "E2_VENCTO", "E2_VALOR", "E2_HIST", "E2_MOEDA"}
+
+        If lLiberacao 
+          AAdd(aFields, "E2_STATLIB")
+          AAdd(aFields, "E2_DATALIB")
+        EndIf
+
+        If X3Obrigat(aRetAdv[nJ][1]) .Or. AScan(aFields, aRetAdv[nJ][1]) > 0
+         
+          If aRetAdv[nJ][1] == "E2_TIPO"
+            aRetAdv[nJ][2] := "NDF"
+          ElseIf aRetAdv[nJ][1] == "E2_HIST"
+            aRetAdv[nJ][2] := "REF. " + aRetAdv[nJ][2]
+          ElseIf aRetAdv[nJ][1] == "E2_EMISSAO"
+            aRetAdv[nJ][2] := dDatabase
+          ElseIf aRetAdv[nJ][1] == "E2_VENCTO"
+            aRetAdv[nJ][2] := dDatabase
+          ElseIf aRetAdv[nJ][1] == "E2_VENCREA"
+            aRetAdv[nJ][2] := dDatabase
+          ElseIf aRetAdv[nJ][1] == "E2_STATLIB"
+            aRetAdv[nJ][2] := "03"
+          ElseIf aRetAdv[nJ][1] == "E2_DATALIB"
+            aRetAdv[nJ][2] := dDatabase
+          EndIf
+
+          AAdd(aIncNDF, {aRetAdv[nJ][1], aRetAdv[nJ][2]})
+        EndIf
+      
+      Next nJ
+
+      aRet := ::insertPay(aIncNDF)
+
+      If !aRet[1]
+        DisarmTransaction()
+        Return ::restReturn(500, aRet[3])
+      EndIf
+
+      aNDF := StrTokArr(aRet[2], "_")
+      aRetNDF := oOnfly:GetPayable(aNDF[1], aNDF[2])
+      nRecnoNDF := oOnfly:GetRecno("SE2", aNDF[2])
+
+      AAdd(aRecnoNDF, nRecnoNDF)
+
+    Next nI
+    
+    //Compensa o RDV com o NDF
+    lRet := oOnfly:PaymentClearing(aRecnoRdv, aRecnoNDF, dDatabase)
+
+    If !lRet
+      DisarmTransaction()
+      Return ::restReturn(500, oOnfly:GetErrors())
+    EndIf
+
+  End Transaction
+
+  If lRet
+    Return ::restReturn(200, '{"status": "Compensação realizada com sucesso!"}')
+  EndIf
+
+Return .F.
+
+///////////////// Documento de Entrada /////////////////
+Method InsertDocument() Class WSONFLY
+  
+  Local aArray := {}
+  Local aDoc   := {}
+  Local aItems := {}
+  Local aRetPO := {}
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local nI, nJ := 1
+  Local lGeneratePurchaseOrder := .F.
+
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+  For nI := 1 to Len(aArray)
+    If aArray[nI][1] == "ITENS"
+      aObjItems := aArray[nI][2]
+      For nJ := 1 to Len(aObjItems)
+        AAdd(aItems, ::objectToStruct(aObjItems[nJ]))
+      Next nJ
+    ElseIf aArray[nI][1] == "GERAR_PEDIDO_COMPRA" .And. aArray[nI][2] == "S"
+      lGeneratePurchaseOrder := .T.
+    Else
+      AAdd(aDoc, aArray[nI])
+    EndIf
+  Next nI
+
+  If Len(aDoc) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (cabeçalho)"}')
+  EndIf
+
+  If Len(aItems) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (itens)"}')
+  EndIf
+
+  Begin Transaction
+
+    If lGeneratePurchaseOrder
+      
+      aRetPO := ::transformDocumentInPurchaseOrder(aDoc, aItems)
+
+      If !aRetPO[1]
+        DisarmTransaction()
+        Return ::restReturn(412, aRetPO[2])
+      EndIf
+
+      aDoc := aRetPO[3]
+      aItems := aRetPO[4]
+      
+    EndIf
+
+    aRet := ::insertDoc(aDoc, aItems)
+  
+  End Transaction
+
+  If aRet[1]
+
+    oResp["status"] := "Relatório de despesas adicionado com sucesso!"
+    oResp["index"]  := aRet[2]
+    aKey := StrTokArr(oResp["index"], "_")
+
+    aRetDoc := oOnfly:GetSupplierInvoice(aKey[1], aKey[2])
+    
+    //Resposta da consulta
+    oDoc := JsonObject():New()
+    
+    For nI := 1 to Len(aRetDoc)
+        oDoc[aRetDoc[nI][1]] := ::convertResponse(aRetDoc[nI][2])
+    Next nJ
+
+    oResp["data"] := oDoc
+    
+    Return ::restReturn(200, oResp:toJSON())
+
+  Else
+    Return ::restReturn(500, aRet[3])
+  EndIf
+
+Return .F.
+
+Method InsertPreDocument() Class WSONFLY
+  
+  Local aArray := {}
+  Local aDoc   := {}
+  Local aItems := {}
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local aRetPO := {}
+  Local nI, nJ := 1
+  Local lGeneratePurchaseOrder := .F.
+
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+  For nI := 1 to Len(aArray)
+    If aArray[nI][1] == "ITENS"
+      aObjItems := aArray[nI][2]
+      For nJ := 1 to Len(aObjItems)
+        AAdd(aItems, ::objectToStruct(aObjItems[nJ]))
+      Next nJ
+    ElseIf aArray[nI][1] == "GERAR_PEDIDO_COMPRA" .And. aArray[nI][2] == "S"
+      lGeneratePurchaseOrder := .T.
+    Else
+      AAdd(aDoc, aArray[nI])
+    EndIf
+  Next nI
+
+  If Len(aDoc) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (cabeçalho)"}')
+  EndIf
+
+  If Len(aItems) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (itens)"}')
+  EndIf
+
+  Begin Transaction
+
+    If lGeneratePurchaseOrder
+      
+      aRetPO := ::transformDocumentInPurchaseOrder(aDoc, aItems)
+
+      If !aRetPO[1]
+        DisarmTransaction()
+        Return ::restReturn(412, aRetPO[2])
+      EndIf
+
+      aDoc := aRetPO[3]
+      aItems := aRetPO[4]
+      
+    EndIf
+    
+    aRet := ::insertPreDoc(aDoc, aItems)
+  
+  End Transaction
+    
+  If aRet[1]
+
+    oResp["status"] := "Relatório de despesas adicionado com sucesso!"
+    oResp["index"]  := aRet[2]
+    aKey := StrTokArr(oResp["index"], "_")
+
+    aRetDoc := oOnfly:GetSupplierInvoice(aKey[1], aKey[2])
+    
+    //Resposta da consulta
+    oDoc := JsonObject():New()
+    
+    For nI := 1 to Len(aRetDoc)
+        oDoc[aRetDoc[nI][1]] := ::convertResponse(aRetDoc[nI][2])
+    Next nJ
+
+    oResp["data"] := oDoc
+    
+    Return ::restReturn(200, oResp:toJSON())
+
+  Else
+    Return ::restReturn(500, aRet[3])
+  EndIf
+
+Return .F.
+
+Method GetDocument() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local nI      := 1
+
+  Local cKey := aParams["index"]
+
+  //Verifica se os parametros foram passados
+  If Len(Alltrim(cKey)) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (index)"}')
+  EndIf
+
+  //Busca informações do documento
+  aKey := StrTokArr(cKey, "_")
+  aRetDoc := oOnfly:GetSupplierInvoice(aKey[1], aKey[2])
+
+  //Se não existir registro
+  If Len(aRetDoc) == 0
+    Return ::restReturn(400, '{"status": "Documento de entrada não localizado"}')
+  EndIf
+    
+  //Resposta da consulta
+  oResp["index"] := cKey
+  oDoc := JsonObject():New()
+  
+  For nI := 1 to Len(aRetDoc)
+      oDoc[aRetDoc[nI][1]] := ::convertResponse(aRetDoc[nI][2])
+  Next nJ
+
+  oResp["data"] := {}
+  AAdd(oResp["data"], oDoc)
+  
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Pedido de Compra /////////////////
+Method InsertPurchaseOrder() Class WSONFLY
+  
+  Local aArray := {}
+  Local aDoc   := {}
+  Local aItems := {}
+  Local cBody  := oRest:getBodyRequest()
+  Local oOnfly := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local nI, nJ := 1
+  
+  oJson := JsonObject():New()
+  oJson:FromJson(cBody)
+  
+  aArray := ::objectToStruct(oJson)
+  For nI := 1 to Len(aArray)
+    If aArray[nI][1] == "ITENS"
+      aObjItems := aArray[nI][2]
+      For nJ := 1 to Len(aObjItems)
+        AAdd(aItems, ::objectToStruct(aObjItems[nJ]))
+      Next nJ
+    Else
+      AAdd(aDoc, aArray[nI])
+    EndIf
+  Next nI
+
+  If Len(aDoc) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (cabeçalho)"}')
+  EndIf
+
+  If Len(aItems) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (itens)"}')
+  EndIf
+
+  aRet := ::insertOrder(aDoc, aItems)
+
+  If aRet[1]
+
+    oResp["status"] := "Relatório de despesas adicionado com sucesso!"
+    oResp["index"]  := aRet[2]
+    aKey := StrTokArr(oResp["index"], "_")
+
+    aRetDoc := oOnfly:GetPurchaseOrder(aKey[1], aKey[2])
+    
+    //Resposta da consulta
+    oDoc := JsonObject():New()
+    
+    For nI := 1 to Len(aRetDoc)
+        oDoc[aRetDoc[nI][1]] := ::convertResponse(aRetDoc[nI][2])
+    Next nJ
+
+    oResp["data"] := oDoc
+    
+    Return ::restReturn(200, oResp:toJSON())
+
+  Else
+    Return ::restReturn(500, aRet[3])
+  EndIf
+
+Return .F.
+
+Method GetPurchaseOrder() Class WSONFLY
+
+  Local aParams := oRest:getQueryRequest()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local nI      := 1
+
+  Local cKey := aParams["index"]
+
+  //Verifica se os parametros foram passados
+  If Len(Alltrim(cKey)) == 0
+    Return ::restReturn(412, '{"status": "Parâmetros não informados (index)"}')
+  EndIf
+
+  //Busca informações do documento
+  aKey := StrTokArr(cKey, "_")
+  aRetDoc := oOnfly:GetPurchaseOrder(aKey[1], aKey[2])
+
+  //Se não existir registro
+  If Len(aRetDoc) == 0
+    Return ::restReturn(400, '{"status": "Documento de entrada não localizado"}')
+  EndIf
+    
+  //Resposta da consulta
+  oResp["index"] := cKey
+  oDoc := JsonObject():New()
+  
+  For nI := 1 to Len(aRetDoc)
+      oDoc[aRetDoc[nI][1]] := ::convertResponse(aRetDoc[nI][2])
+  Next nJ
+
+  oResp["data"] := {}
+  AAdd(oResp["data"], oDoc)
+  
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Query - Select /////////////////
+Method QuerySelect() Class WSONFLY
+  
+  Local cBody   := oRest:getBodyRequest()
+  Local oJson   := JsonObject():New()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local lKey    := .F.
+  Local cTable  := ""
+  Local aSelect := {}
+  Local aWhere  := {} 
+  Local nLimit  := 100
+  Local nI, nJ := 1
+  
+  oJson:FromJson(cBody)
+  
+  cTable := oJson:GetJsonObject("table")
+  aSelect := oJson:GetJsonObject("select")
+  
+  aWhereP :=  oJson:GetJsonObject("where")
+  If !Empty(aWhereP)
+    For nI := 1 to Len(aWhereP)
+      AAdd(aWhere, {;
+                  aWhereP[nI]:GetJsonObject("field"),;
+                  aWhereP[nI]:GetJsonObject("operator"),;
+                  aWhereP[nI]:GetJsonObject("content");
+                })
+    Next nI  
+  EndIf
+
+  nLimit := oJson:GetJsonObject("limit")
+  lKey := oJson:GetJsonObject("key")
+
+  cQuery := oOnfly:GenericQuery(cTable, aSelect, aWhere, nLimit)
+  aRet := oOnfly:ExecuteQuery(cQuery)
+
+  //Resposta da consulta
+  oResp["data"] := {}
+    
+  For nI := 1 to Len(aRet)
+  
+    oRet := JsonObject():New()
+    
+    For nJ := 1 to Len(aRet[nI])
+
+      cField := aRet[nI][nJ][1]
+      xContent := ::convertResponse(aRet[nI][nJ][2])
+
+      //Obtém o RECNO para formar o índice
+      If cField == "RECNOKEY_"
+
+        If lKey
+
+          DBSelectArea(cTable)
+          DBGoTo(xContent)
+
+          If Recno() == xContent
+            cKey := oOnfly:GetTableName(cTable) + "_" + oOnfly:GetUniqueKey(cTable)
+
+            oRet["key"] := cKey
+          EndIf
+
+          DbCloseArea()
+        EndIf
+
+        Loop
+
+      EndIf
+
+      //Monta a resposta
+      oRet[cField] := xContent
+      
+    Next nJ
+
+    AAdd(oResp["data"], oRet)
+  
+  Next nI
+
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Query - Select /////////////////
+Method GenerateNextCodeByQuerySelect() Class WSONFLY
+  
+  Local cBody   := oRest:getBodyRequest()
+  Local oJson   := JsonObject():New()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp   := JsonObject():New()
+  Local aWhere  := {}
+  Local cOrder  := ""
+  Local nLimit  := 1
+  Local nI, nJ := 1
+  Private cTable  := ""
+  Private cField  := ""
+    
+  oJson:FromJson(cBody)
+  
+  cTable := oJson:GetJsonObject("table")
+  If Type("cTable") != "C"
+    Return ::restReturn(412, '{"status": "table é de envio obrigatório!"}')
+  EndIf
+  
+  cField := oJson:GetJsonObject("field")
+  If Type("cField") != "C"
+    Return ::restReturn(412, '{"status": "field é de envio obrigatório!"}')
+  EndIf
+
+  DbSelectArea(cTable)
+  If FieldPos(cField) == 0
+    Return ::restReturn(412, '{"status": "O campo '+ cField +' não existe na tabela ' + cTable + '!"}')
+  EndIf
+
+  cOrder := cField + " DESC "
+  
+  aWhereP := oJson:GetJsonObject("where")
+  If !Empty(aWhereP)
+    For nI := 1 to Len(aWhereP)
+      AAdd(aWhere, {;
+                  aWhereP[nI]:GetJsonObject("field"),;
+                  aWhereP[nI]:GetJsonObject("operator"),;
+                  aWhereP[nI]:GetJsonObject("content");
+                })
+    Next nI
+  EndIf
+
+  cQuery := oOnfly:GenericQuery(cTable, {cField}, aWhere, nLimit, cOrder)
+  aRet := oOnfly:ExecuteQuery(cQuery)
+
+  oResp["status"] := "Código gerado com sucesso!"
+  
+  If Len(aRet) == 0
+    oResp["code"] := PadL("0", TamSX3(cField)[01], "0")
+    oResp["nextCode"] := SOMA1(oResp["code"])
+  EndIf
+
+  //Resposta da consulta
+  oResp["data"] := {}
+    
+  For nI := 1 to Len(aRet)
+  
+    oRet := JsonObject():New()
+    
+    For nJ := 1 to Len(aRet[nI])
+
+      cField := aRet[nI][nJ][1]
+      xContent := ::convertResponse(aRet[nI][nJ][2])
+
+      //Obtém o RECNO para formar o índice
+      If cField == "RECNOKEY_"
+        Loop
+      EndIf
+
+      //Monta a resposta
+      oRet[cField]  := xContent
+      oResp["code"] := xContent
+      oResp["nextCode"] := SOMA1(xContent)
+      
+    Next nJ
+
+    AAdd(oResp["data"], oRet)
+  
+  Next nI
+
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+///////////////// Generic - Insert /////////////////
+Method GenericInsert() Class WSONFLY
+
+  Local cBody  := oRest:getBodyRequest()
+  Local oJson  := JsonObject():New()
+  Local oResp  := JsonObject():New()
+  Local cTable := ""
+  Local aData  := {} 
+  Local nI     := 1
+  Local aItems := {}
+  Local oOnfly := ONFLYEXEC():New()
+  
+  oJson:FromJson(cBody)
+  
+  cTable := oJson:GetJsonObject("table")
+
+  aData :=  oJson:GetJsonObject("data")
+  aArray := ::objectToStruct(aData)
+  
+  For nI := 1 to Len(aArray)
+    AAdd(aItems, {aArray[nI][1], aArray[nI][2]})
+  Next nI
+
+  lRet := oOnfly:GenericInsert(cTable, aItems)
+
+  If lRet 
+    cKey := oOnfly:GetTableName(cTable) + "_" + oOnfly:GetUniqueKey(cTable)
+
+    oResp["status"] := "Registro adicionado com sucesso!"
+    oResp["table"]  := cTable
+    oResp["index"]  := cKey
+    aKey := StrTokArr(oResp["index"], "_")
+
+    Return ::restReturn(200, oResp:toJSON())
+
+  EndIf
+
+  Return ::restReturn(500, oOnfly:GetErrors())
+
+Return .F.
+
+///////////////// Generic - Update /////////////////
+Method GenericUpdate() Class WSONFLY
+
+  Local cBody   := oRest:getBodyRequest()
+  Local oJson   := JsonObject():New()
+  Local oOnfly  := ONFLYEXEC():New()
+  Local oResp  := JsonObject():New()
+  Local cTable  := ""
+  Local aData   := {}
+  Local aSelect := {"R_E_C_N_O_ RECNO"}
+  Local aWhere  := {} 
+  Local nLimit  := 100
+  Local nI, nJ  := 1
+  
+  oJson:FromJson(cBody)
+  
+  cTable := oJson:GetJsonObject("table")
+  
+  aWhereP :=  oJson:GetJsonObject("where")
+  For nI := 1 to Len(aWhereP)
+    AAdd(aWhere, {;
+                aWhereP[nI]:GetJsonObject("field"),;
+                aWhereP[nI]:GetJsonObject("operator"),;
+                aWhereP[nI]:GetJsonObject("content");
+              })
+  Next nI
+
+  If !oJson:HasProperty("data")
+    Return ::restReturn(412, '{"status": "O elemento data é de envio obrigatório!"}')
+  EndIf
+
+  aData  := oJson:GetJsonObject("data")
+  aArray := ::objectToStruct(aData)
+  
+  If Len(aArray) == 0
+    Return ::restReturn(412, '{"status": "O elemento data não contém informações!"}')
+  EndIf
+  
+  cQuery := oOnfly:GenericQuery(cTable, aSelect, aWhere, nLimit)
+  aRet := oOnfly:ExecuteQuery(cQuery)
+
+  If Len(aRet) > 1
+    Return ::restReturn(412, '{"status": "A condição retornou mais de um registro!"}')
+  EndIf
+
+  If Len(aRet) <> 1
+    Return ::restReturn(412, '{"status": "A condição não retornou registros!"}')
+  EndIf
+
+  //Posiciona no registro encontrado
+  For nI := 1 to Len(aRet)
+    
+    For nJ := 1 to Len(aRet[nI])
+
+      aItem  := aRet[nI][nJ]
+      cField := aItem[1]
+      xContent := ::convertResponse(aItem[2])
+
+      //Obtém o RECNO para formar o índice
+      If cField == "RECNO"
+        lRet := oOnfly:GenericUpdate(cTable, xContent, aArray)
+
+       If lRet
+          cKey := oOnfly:GetTableName(cTable) + "_" + oOnfly:GetUniqueKey(cTable)
+
+          oResp["status"] := "Registro alterado com sucesso!"
+          oResp["table"]  := cTable
+          oResp["index"]  := cKey
+
+          Return ::restReturn(200, oResp:toJSON())
+        EndIf
+
+      EndIf
+
+    Next nJ
+
+  Next nI
+
+  Return ::restReturn(500, oOnfly:GetErrors())
+
+Return .F.
+
+///////////////// Generic - Adiciona dias úteis em uma data /////////////////
+Method AddWorkdayInDate() Class WSONFLY
+
+  Local oResp := JsonObject():New()
+  Local jPath := JsonObject():New()
+  Local dDate := MsDate()
+  Local nDays := 0
+  Local nQty  := 0
+
+  jPath := oRest:getPathParamsRequest()
+
+  If jPath <> Nil
+    dDate := StoD(jPath['date'])
+    nDays := Val(jPath['days'])
+    
+    While nQty < nDays
+
+      dNewDate := DaySum(dDate, 1)
+      dDtValid := DataValida(dNewDate, .T.)
+
+      If dDtValid == dNewDate
+        nQty++
+      EndIf
+
+      dDate := dNewDate
+    
+    End
+
+    oResp["status"] := "Cálculo realizado com sucesso!"
+    oResp["date"]   := DtoS(dDate)
+
+    Return ::restReturn(200, oResp:toJSON())
+
+  EndIf
+
+Return .F.
+
+///////////////// Generic - Executa a função SOMA1 baseado no código informado /////////////////
+Method GenerateNextCode() Class WSONFLY
+  
+  Local oResp := JsonObject():New()
+  Local jPath := JsonObject():New()
+  Local cCode := ""
+  
+  jPath := oRest:getPathParamsRequest()
+
+  If jPath <> Nil
+    cCode := jPath['code']
+
+    oResp["status"] := "Código gerado com sucesso!"
+    oResp["code"]   := cCode
+    oResp["nextCode"] := SOMA1(cCode)
+
+    Return ::restReturn(200, oResp:toJSON())
+
+  EndIf
+
+Return .F.
+
+///////////////// Generic - Retorna informações do servidor /////////////////
+Method GetServerInfo() Class WSONFLY
+
+  Local oResp := JsonObject():New()
+  Local oRet  := JsonObject():New()
+
+  oRet['server_build'] := GetBuild(.F.)
+  oRet['dbaccess_build'] := TCGetBuild()
+  oRet['dbaccess_version'] := TCAPIVersion()
+  oRet['database'] := TCGetDB()
+
+  oResp["data"] := oRet
+
+  //Define o tipo de retorno e a resposta
+  Return ::restReturn(200, oResp:toJSON())
+
+Return .F.
+
+Method GetSourceCodeInfo() Class WSONFLY
+
+  Local oResp := JsonObject():New()
+  Local jPath := JsonObject():New()
+  Local cName := ""
+  
+  jPath := oRest:getPathParamsRequest()
+
+  If jPath <> Nil
+    cName := jPath['name']
+
+    If Len(cName) < 5
+      Return ::restReturn(412, '{"status": "Nome do fonte inválido!"}')
+    EndIf
+
+    aData := GetApoInfo(cName)
+    If Len(aData) == 0
+      Return ::restReturn(412, '{"status": "Fonte não localizado no RPO!"}')
+    EndIf
+    
+    If Len(aData) > 0
+      oResp["status"] := "Fonte localizado no RPO!"
+      
+      oResp["fonte"]     := aData[1]
+      oResp["linguagem"] := aData[2]
+      oResp["modo_compilacao"] := aData[3]
+      oResp["data_ultima_modificacao"] := DtoC(aData[4])
+      oResp["hora_ultima_modificacao"] := aData[5]
+
+      Return ::restReturn(200, oResp:toJSON())
+    EndIf
+
+  EndIf
+
+Return .F.
+
+Method FindSourceCode() Class WSONFLY
+
+  Local oResp := JsonObject():New()
+  Local jPath := JsonObject():New()
+  Local cName := ""
+  Local nI, aFontes
+  
+  jPath := oRest:getPathParamsRequest()
+
+  If jPath <> Nil
+    cName := jPath['name']
+
+    If Len(cName) < 3
+      Return ::restReturn(412, '{"status": "Nome do fonte inválido!"}')
+    EndIf
+
+    aFontes := GetSrcArray(cName)
+
+    //Resposta da consulta
+    oResp["data"] := {}
+    
+    For nI := 1 to Len(aFontes)
+      AAdd(oResp["data"], aFontes[nI])
+    Next nI
+
+    Return ::restReturn(200, oResp:toJSON())
+    
+  EndIf
+
+Return .F.
+
+
+
+
+
+
+///////////////// Auxiliares ///////////////// 
+Method convertResponse(xContent) Class WSONFLY
+
+    cTpField := ValType(xContent)
+
+    If cTpField == "C"
+        xContent := Alltrim(xContent)
+    EndIf
+
+Return xContent
+
+Method convertContent(cField, xContent) Class WSONFLY
+
+    xRet := xContent
+    cTpField := ValType(xContent)
+    cFldSX3  := GetSx3Cache(cField, "X3_TIPO")
+
+    If cTpField <> cFldSX3
+
+        If cTpField == "C" .And. cFldSX3 == "N"
+            xRet := Val(xContent)
+        ElseIf cTpField == "C" .And. cFldSX3 == "D"
+            xRet := StoD(xContent)
+        EndIf
+
+    EndIf
+
+Return xRet
+
+
+/*/{Protheus.doc} insertPay
+Função responsável por realizar a inclusão de um título a pagar através do execauto FINA050
+@type function
+@version 1.1.0
+@author Paulo Alves
+@since 02/03/2022
+@param aArray, array, Array com a estrutura dos campos que serão inseridos
+@return array, Array contemplando o status da inclusão, a chave única do registro e as mensagens de erro (se houver)
+/*/
+Method insertPay(aArray) Class WSONFLY
+
+    Local oOnfly := ONFLYEXEC():New()
+    Local cError := ""
+
+    lRet := oOnfly:InsertPayable(aArray)
+
+    If !lRet
+        cError := oOnfly:GetErrors()
+    EndIf
+
+    cKey := oOnfly:GetTableName("SE2") + "_" + oOnfly:GetUniqueKey("SE2")
+
+Return ({lRet, cKey, cError})
+
+Method insertInvoicePay(aRecnoPayments, aArray) Class WSONFLY
+
+    Local oOnfly := ONFLYEXEC():New()
+    Local cError := ""
+    Local cKey := "_"
+
+    lRet := oOnfly:InsertPaymentInvoice(aRecnoPayments, aArray)
+
+    If !lRet
+        cError := oOnfly:GetErrors()
+    EndIf
+
+    cKey := oOnfly:GetTableName("SE2") + "_" + oOnfly:GetUniqueKey("SE2")
+    cKeyTit := SE2->E2_FILIAL + SE2->E2_PREFIXO + SE2->E2_NUM
+
+    DbSelectArea("SE2")
+    SE2->(DBGoTop())
+    If SE2->(DBSeek(cKeyTit))
+    
+      While !SE2->(Eof()) .And. SE2->(E2_FILIAL + E2_PREFIXO + E2_NUM) == cKeyTit
+
+          If Alltrim(SE2->E2_FATURA) == "NOTFAT"
+            cKey := oOnfly:GetTableName("SE2") + "_" + oOnfly:GetUniqueKey("SE2")
+            Exit
+          EndIf
+
+          SE2->(DbSkip())
+          
+      End
+    EndIf
+    
+Return ({lRet, cKey, cError})
+
+Method insertDoc(aDoc, aItems) Class WSONFLY
+
+    Local oOnfly := ONFLYEXEC():New()
+    Local cError := ""
+
+    lRet := oOnfly:InsertSupplierInvoice(aDoc, aItems)
+
+    If !lRet
+        cError := oOnfly:GetErrors()
+    EndIf
+
+    cKey := oOnfly:GetTableName("SF1") + "_" + oOnfly:GetUniqueKey("SF1")
+
+Return ({lRet, cKey, cError})
+
+Method insertPreDoc(aDoc, aItems) Class WSONFLY
+
+    Local oOnfly := ONFLYEXEC():New()
+    Local cError := ""
+
+    lRet := oOnfly:InsertSupplierPreInvoice(aDoc, aItems)
+
+    If !lRet
+        cError := oOnfly:GetErrors()
+    EndIf
+
+    cKey := oOnfly:GetTableName("SF1") + "_" + oOnfly:GetUniqueKey("SF1")
+
+Return ({lRet, cKey, cError})
+
+Method insertOrder(aDoc, aItems) Class WSONFLY
+
+    Local oOnfly := ONFLYEXEC():New()
+    Local cError := ""
+
+    lRet := oOnfly:InsertPurchaseOrder(aDoc, aItems)
+
+    If !lRet
+        cError := oOnfly:GetErrors()
+    EndIf
+
+    cKey := oOnfly:GetTableName("SC7") + "_" + oOnfly:GetUniqueKey("SC7")
+
+Return ({lRet, cKey, cError})
+
+/*/{Protheus.doc} objectToStruct
+Função responsável por receber um JSON e retornar um array com a estrutura correta dos campos
+@type function
+@version 1.1.0
+@author Paulo Alves
+@since 02/03/2022
+@param oJson, object, JSON contemplando os campos que serão inseridos
+@return array, Array com a correta estrutura dos campos
+/*/
+Method objectToStruct(oJson) Class WSONFLY
+    
+    Local nI := 0
+    Local aArray := {}
+
+    aKeys := oJson:GetNames()
+
+    For nI := 1 To Len(aKeys)
+
+        cField := aKeys[nI]
+        xCont  := oJson[aKeys[nI]]
+
+        xCont := ::convertContent(cField, xCont)
+
+        AAdd(aArray, {cField, xCont, Nil})
+
+    Next nI
+
+Return aArray
+
+Method transformDocumentInPurchaseOrder(aDoc, aItems) Class WSONFLY
+
+  Local aRetDataPO := ::convertToPurchaseOrder(aDoc, aItems)  
+  Local aRetPO := ::insertOrder(aRetDataPO[1], aRetDataPO[2])
+  Local cMsg := ""
+  Local nI := 1
+
+  If !aRetPO[1]
+    cMsg := '{"status": "Erro ao gerar o pedido de compra: ' + aRetPO[3] + '"}'
+    Return ({.F., cMsg, aDoc, aItems})
+  EndIf
+
+  //Busca informações do documento
+  aKey := StrTokArr(aRetPO[2], "_")
+
+  DbSelectArea("SC7")
+  SC7->(DbSetOrder(1))
+  If DbSeek(aKey[2])
+    cSC7Filial := SC7->C7_FILIAL
+    cSC7Num := SC7->C7_NUM
+  Else
+    cMsg := '{"status": "Erro ao localizar o pedido de compra"}'
+    Return ({.F., cMsg, aDoc, aItems})
+  EndIf
+
+  //Percorre os itens do documento
+  If DbSeek(cSC7Filial + cSC7Num)
+    While SC7->(!Eof()) .And. SC7->C7_NUM == cSC7Num
+    
+      cSC7Prod  := Alltrim(SC7->C7_PRODUTO)
+      cSC7Item  := Alltrim(SC7->C7_ITEM)
+      nSC7Quant := SC7->C7_QUANT
+      nSC7Total := SC7->C7_TOTAL
+
+      nPosCOD   := 0
+      nPosQUANT := 0
+      nPosTOTAL := 0
+      nPosPEDIDO := 0
+      nPosITEMPC := 0
+
+      For nI := 1 to Len(aItems)
+
+        nPosCOD    := AScan(aItems[nI], {|x| Alltrim(x[1]) == "D1_COD"})
+        nPosQUANT  := AScan(aItems[nI], {|x| Alltrim(x[1]) == "D1_QUANT"})
+        nPosTOTAL  := AScan(aItems[nI], {|x| Alltrim(x[1]) == "D1_TOTAL"})
+        nPosPEDIDO := AScan(aItems[nI], {|x| Alltrim(x[1]) == "D1_PEDIDO"})
+        nPosITEMPC := AScan(aItems[nI], {|x| Alltrim(x[1]) == "D1_ITEMPC"})
+
+        If nPosPEDIDO == 0 .And. nPosITEMPC == 0;
+          .And. aItems[nI][nPosCOD][2] == cSC7Prod; 
+          .And. aItems[nI][nPosQUANT][2] == nSC7Quant;
+          .And. aItems[nI][nPosTOTAL][2] == nSC7Total
+
+          AAdd(aItems[nI], {"D1_PEDIDO", cSC7Num, Nil})
+          AAdd(aItems[nI], {"D1_ITEMPC", cSC7Item, Nil})
+        EndIf
+
+      Next nI
+
+      SC7->(DbSkip())
+    End
+  EndIf
+
+Return ({.T., cMsg, aDoc, aItems})
+
+Method convertToPurchaseOrder(aDoc, aItems) Class WSONFLY
+
+  Local aDocPO := {}
+  Local aItemPO := {}
+  Local aItemsPO := {}
+  Local nI, nJ := 1
+  
+  //Cabeçalho
+  For nI := 1 to Len(aDoc)
+
+    cField := aDoc[nI][1]
+    
+    If cField == "F1_EMISSAO"
+      AAdd(aDocPO, {"C7_EMISSAO", aDoc[nI][2], aDoc[nI][3]})
+    ElseIf cField == "F1_FORNECE"
+      AAdd(aDocPO, {"C7_FORNECE", aDoc[nI][2], aDoc[nI][3]})
+    ElseIf cField == "F1_LOJA"
+      AAdd(aDocPO, {"C7_LOJA", aDoc[nI][2], aDoc[nI][3]})
+    ElseIf cField == "F1_COND"
+      AAdd(aDocPO, {"C7_COND", aDoc[nI][2], aDoc[nI][3]})
+    EndIf
+
+  Next nI
+
+  //Itens
+  For nI := 1 to Len(aItems)
+
+    aItem := aItems[nI]
+    aItemPO := {}
+
+    For nJ := 1 to Len(aItem)
+
+      cField := aItem[nJ][1]
+    
+      If cField == "D1_COD"
+        AAdd(aItemPO, {"C7_PRODUTO", aItem[nJ][2], aItem[nJ][3]})
+      ElseIf cField == "D1_QUANT"
+        AAdd(aItemPO, {"C7_QUANT", aItem[nJ][2], aItem[nJ][3]})
+      ElseIf cField == "D1_VUNIT"
+        AAdd(aItemPO, {"C7_PRECO", aItem[nJ][2], aItem[nJ][3]})
+      ElseIf cField == "D1_TOTAL"
+        AAdd(aItemPO, {"C7_TOTAL", aItem[nJ][2], aItem[nJ][3]})
+      ElseIf cField == "D1_TES"
+        AAdd(aItemPO, {"D1_TES", aItem[nJ][2], aItem[nJ][3]})
+      ElseIf cField == "D1_VALDESC"
+        AAdd(aItemPO, {"C7_VLDESC", aItem[nJ][2], aItem[nJ][3]})
+      EndIf
+
+    Next nJ
+
+    AAdd(aItemsPO, aItemPO)
+
+  Next nI
+
+Return {aDocPO, aItemsPO}
