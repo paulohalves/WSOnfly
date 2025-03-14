@@ -541,7 +541,10 @@ Method InsertPayable(aData) Class ONFLYEXEC
 	Public nOnfChqAdt  := 2
 	Public nOnfMovSChq := 1
 	
-	Begin Transaction
+	//Comentado a Transaction pois ocasion erro na nova LIB.
+	//Se atentar a possivel correção da TOTVS para voltar com a Transaction.
+	//Guilherme Lopes (PGA) - 12/03/2025
+	//Begin Transaction
 
 		For nX := 1 to Len(aData)
 
@@ -615,7 +618,7 @@ Method InsertPayable(aData) Class ONFLYEXEC
 				::cError := "Erro ao realizar a inclusão do título a pagar"
 			EndIf
 
-			DisarmTransaction()
+			//DisarmTransaction()
 
 			Return ::lRet
 
@@ -623,7 +626,7 @@ Method InsertPayable(aData) Class ONFLYEXEC
 
 		::lRet := .T.
 
-	End Transaction
+	//End Transaction
 	
 Return ::lRet
 
